@@ -1,0 +1,16 @@
+Server:
+  Name: "ffmpeg-oss-service"
+  Mode: "dev"
+  Host: "0.0.0.0"
+  Port: 9002
+  Version: "v1.0.1"
+  TempDir: "/tmp/ffmpeg-oss-service"
+
+
+OSS:
+  Endpoint: "182.92.178.25:9000"
+  AccessKeyID: "K1CThqkI22tD0PthpPZP"
+  SecretAccessKey: "orfrcpAnJjhOAHqWcGTit0LklJ0kLVlMXb2MILBd"
+  BucketName: "interview-avfile"
+  Location: "us-east-1"
+  UseSSL: false
