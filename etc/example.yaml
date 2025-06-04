@@ -1,0 +1,17 @@
+# 将文件重命名为config.yaml
+Server:
+  Name: "ffmpeg-oss-service"
+  Mode: "dev"
+  Host: "0.0.0.0"
+  Port: 9002
+  Version: "v1.0.1"
+  TempDir: "/tmp/ffmpeg-oss-service"
+
+
+OSS:
+  Endpoint: ""
+  AccessKeyID: ""
+  SecretAccessKey: ""
+  BucketName: ""
+  Location: ""
+  UseSSL: false
