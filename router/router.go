@@ -16,9 +16,15 @@ func RegisterRouter(router *gin.Engine) {
 	}
 
 	{
-		// 视频转音频端点
+		// 视频转音频，并上传到OSS中
 		video := v1.Group("/video")
-		video.POST("/convert", handler.ConvertHandler)
+		video.POST("/convert", handler.ConvertUploadHandler)
+	}
+
+	{
+		// 将音频文件上传到OSS上
+		oss := v1.Group("/oss")
+		oss.POST("/upload")
 	}
 
 }

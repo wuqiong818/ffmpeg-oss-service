@@ -5,7 +5,9 @@ import (
 	"ffmpeg-oss-service/router"
 	"fmt"
 	"log"
+	"math/rand"
 	"os"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -28,6 +30,8 @@ func init() {
 	if err := os.MkdirAll(conf.Server.TempDir, 0755); err != nil {
 		log.Fatalf("无法创建临时目录: %v", err)
 	}
+	// 设置随机种子
+	rand.Seed(time.Now().UnixNano())
 }
 
 func main() {

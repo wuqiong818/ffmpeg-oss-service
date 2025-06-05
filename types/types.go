@@ -7,7 +7,7 @@ var (
 )
 
 var (
-	FileFormatError  = "The file format is not supported. Currently, only MP4 is supported."
+	FileFormatError  = "The file format is not supported. Currently, only mp4、acc、mp3、m4a is supported."
 	CreateFileError  = "create file error"
 	SaveFileError    = "save file error"
 	ConvertFileError = "convert file error"

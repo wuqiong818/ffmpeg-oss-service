@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"os/exec"
@@ -20,14 +21,25 @@ import (
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
+type ConvertResponse struct {
+	AudioUrl       string  `json:"audioUrl"`
+	SendFileSize   int64   `json:"sendfileSize"`
+	AudioFileSize  int64   `json:"audioFileSize"`
+	TotalDuration  float64 `json:"totalDuration"`
+	ReceiveFileSec float64 `json:"receiveFileSec"`
+	SaveFileSec    float64 `json:"saveFileSec"`
+	ConvertFileSec float64 `json:"convertFileSec"`
+	UploadFileSec  float64 `json:"uploadFileSec"`
+}
+
 // 转换处理函数
-func ConvertHandler(c *gin.Context) {
+func ConvertUploadHandler(c *gin.Context) {
 	log.Println("接收请求")
 	startTime := time.Now()
 
 	conf := config.Conf
-
-	// 1. 接收上传的视频文件
+	// 1. 接收上传的音视频文件
+	fileReceiveStart := time.Now()
 	file, header, err := c.Request.FormFile("video")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, types.Response{
@@ -38,13 +50,14 @@ func ConvertHandler(c *gin.Context) {
 		return
 	}
 	defer file.Close()
+	fileReceiveDuration := time.Since(fileReceiveStart)
 
 	fileName := header.Filename[:strings.LastIndex(header.Filename, ".")]
-	fmt.Println("fileName = ", fileName)
+	log.Println("文件接收完毕,fileName = ", fileName)
 
-	// 验证文件类型，目前仅支持.mp4的视频提取
+	// 验证文件类型，如果是.mp4的视频就提取成音频；如果是音频的话，就直接进行上传操作。
 	ext := filepath.Ext(header.Filename)
-	if ext != ".mp4" {
+	if ext != ".mp4" && ext != ".aac" && ext != ".mp3" && ext != ".m4a" {
 		c.JSON(http.StatusBadRequest, types.Response{
 			Code:    types.ClientError,
 			Message: types.FileFormatError,
@@ -54,7 +67,8 @@ func ConvertHandler(c *gin.Context) {
 	}
 
 	// 2. 保存为临时文件
-	videoPath := filepath.Join(conf.Server.TempDir, fileName+time.Now().Format("20060102150405")+ext)
+	tempSaveFileStart := time.Now()
+	videoPath := filepath.Join(conf.Server.TempDir, fileName+time.Now().Format("20060102150405")+randTwoDigits()+ext)
 	fmt.Println("videoPaht = ", videoPath)
 	tempVideo, err := os.Create(videoPath) //创建一个空文件
 	if err != nil {
@@ -76,29 +90,41 @@ func ConvertHandler(c *gin.Context) {
 		})
 		return
 	}
+	saveFileDuration := time.Since(tempSaveFileStart)
 	log.Println("保存为临时文件")
 
-	// 3. 使用 FFmpeg 转换
-	audioPath := videoPath[:len(videoPath)-len(ext)] + ".aac"
-	fmt.Println("audioPath = ", audioPath)
-	convertTime, err := convertToAAC(videoPath, audioPath)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, types.Response{
-			Code:    types.ServerInternalError,
-			Message: types.ConvertFileError + ":" + err.Error(),
-			Data:    nil,
-		})
-		return
+	var audioPath string
+	var convertFileDuration time.Duration
+	var objectName string
+	if ext == ".mp4" {
+		// 3. 使用 FFmpeg 转换
+		audioPath = videoPath[:len(videoPath)-len(ext)] + ".aac"
+		fmt.Println("audioPath = ", audioPath)
+		convertFileDuration, err = convertToAAC(videoPath, audioPath)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, types.Response{
+				Code:    types.ServerInternalError,
+				Message: types.ConvertFileError + ":" + err.Error(),
+				Data:    nil,
+			})
+			return
+		}
+		log.Println("转换成功")
+		objectName = filepath.Base(audioPath)
+		log.Println("objectName = ", objectName)
+	} else {
+		// 3.如果为音频文件的话，不进行任何处理，直接上传到OSS中
+		audioPath = videoPath
+		fmt.Println("audioPath = ", audioPath)
+		objectName = filepath.Base(audioPath)
+		log.Println("objectName = ", objectName)
 	}
 	defer os.Remove(audioPath)
-	log.Println("转换成功")
 
 	ctx := context.Background()
 
-	objectName := fileName + ".acc"
-
 	// 4. 上传到 OSS
-	audioURL, uploadTime, err := uploadToOSS(ctx, objectName, audioPath)
+	audioURL, audioSize, uploadDuration, err := uploadToOSS(ctx, objectName, audioPath)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, types.Response{
 			Code:    types.ServerInternalError,
@@ -111,12 +137,15 @@ func ConvertHandler(c *gin.Context) {
 
 	// 5. 返回结果
 	totalTime := time.Since(startTime).Seconds()
-	c.JSON(http.StatusOK, gin.H{
-		"audio_url":   audioURL,
-		"duration":    totalTime,
-		"convert_sec": convertTime.Seconds(),
-		"upload_sec":  uploadTime.Seconds(),
-		"file_size":   header.Size,
+	c.JSON(http.StatusOK, ConvertResponse{
+		AudioUrl:       audioURL,
+		SendFileSize:   header.Size,
+		AudioFileSize:  audioSize,
+		TotalDuration:  totalTime,
+		ReceiveFileSec: fileReceiveDuration.Seconds(),
+		SaveFileSec:    saveFileDuration.Seconds(),
+		ConvertFileSec: convertFileDuration.Seconds(),
+		UploadFileSec:  uploadDuration.Seconds(),
 	})
 }
 
@@ -144,7 +173,7 @@ func convertToAAC(videoPath, audioPath string) (time.Duration, error) {
 }
 
 // 上传到 OSS , 并返回一个支持访问的URL,目前是上传到minio中
-func uploadToOSS(ctx context.Context, objectName, filePath string) (string, time.Duration, error) {
+func uploadToOSS(ctx context.Context, objectName, filePath string) (string, int64, time.Duration, error) {
 	start := time.Now()
 
 	ossConf := config.Conf.OSS
@@ -153,14 +182,22 @@ func uploadToOSS(ctx context.Context, objectName, filePath string) (string, time
 		Secure: ossConf.UseSSL,
 	})
 	if err != nil {
-		return "", 0, err
+		return "", 0, 0, err
 	}
 
 	// Upload file with FPutObject
-	_, err = minioClient.FPutObject(ctx, ossConf.BucketName, objectName, filePath, minio.PutObjectOptions{ContentType: "application/octet-stream"})
+	info, err := minioClient.FPutObject(ctx, ossConf.BucketName, objectName, filePath, minio.PutObjectOptions{ContentType: "application/octet-stream"})
 	if err != nil {
-		return "", 0, err
+		return "", 0, 0, err
 	}
 	audioURL := "http://" + ossConf.Endpoint + "/" + ossConf.BucketName + "/" + objectName
-	return audioURL, time.Since(start), nil
+	return audioURL, info.Size, time.Since(start), nil
+}
+
+func randTwoDigits() string {
+	// 生成0到99之间的随机整数
+	n := rand.Intn(100) // 范围：[0, 100)，即0到99
+
+	// 格式化为两位字符串（不足两位时前补0）
+	return fmt.Sprintf("%02d", n)
 }
